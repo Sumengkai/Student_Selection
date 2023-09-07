@@ -26,6 +26,12 @@ public class Student {
 		this.name=name;
 		this.coursepoint=coursepoint;
 	}
+	public Student(String studentid,String name,String courseid,int coursepoint) {
+		this.studentid=studentid;
+		this.name=name;
+		this.courseid=courseid;
+		this.coursepoint=coursepoint;
+	}
 
 
 	public String getStudent_id() {

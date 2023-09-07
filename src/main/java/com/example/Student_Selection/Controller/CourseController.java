@@ -1,6 +1,7 @@
 package com.example.Student_Selection.Controller;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -8,7 +9,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.example.Student_Selection.Service.Face.CourseFace;
 import com.example.Student_Selection.Vo.CourseReq;
 import com.example.Student_Selection.Vo.CourseRes;
-
+@CrossOrigin
 @RestController
 public class CourseController {
 	@Autowired
@@ -57,11 +58,17 @@ public class CourseController {
 		CourseRes res = courseFace.searchCourseId(req.getCourse_id());
 		return res;
 	}
+
 	// -------------------------------------7.課程名稱查詢
 	@PostMapping(value = "/api/Course7")
 	public CourseRes srarchCourseByName(@RequestBody CourseReq req) {
 		CourseRes res = courseFace.searchByCourseName(req.getCourse_name());
 		return res;
-		
+	}
+	// -------------------------------------8.限制人數<會刪>
+	@PostMapping(value = "/api/Course8")
+	public CourseRes addStudentCourseAndLimitPeople(@RequestBody CourseReq req) {
+		CourseRes res = courseFace.addStudentCourseAndLimitPeople(req.getStudentid(), req.getListset());
+		return res;
 	}
 }

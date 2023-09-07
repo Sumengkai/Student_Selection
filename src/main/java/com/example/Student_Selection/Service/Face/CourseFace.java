@@ -20,4 +20,6 @@ public CourseRes searchStudentIdandCourseId(String studentid);
 public CourseRes searchCourseId(String courseid);
 	//--課程名稱查詢
 public CourseRes searchByCourseName(String coursename);
+//--學生選課
+public CourseRes addStudentCourseAndLimitPeople(String id,Set<String>list);
 }

@@ -1,6 +1,6 @@
 package com.example.Student_Selection.Vo;
 
-import java.sql.Time;
+
 import java.util.List;
 
 import javax.persistence.Column;
@@ -20,16 +20,32 @@ public class CourseRes {
 	private String start_time;
 	private String end_time;
 	private Integer course_point;
+	private String code;
 	private String message;
-	private List<Course> courselist; // api 5
+	@JsonProperty("Student_info")
+	private Student student;
+
 	private List<Student> studentlist;// api 5
+	private List<Course> courselist; // api 5
+
 	// -------------------------
 	private Course course;
 
 	public String getCourse_id() {
 		return course_id;
 	}
+
 	// -------------------------
+	public CourseRes() {
+	}
+	public CourseRes(Student student, String message) {
+	this.student = student;
+	this.message =message;
+	}
+	public CourseRes(Course course, String message) {
+		this.course = course;
+		this.message =message;
+		}
 
 	public List<Course> getCourselist() {
 		return courselist;
@@ -96,7 +112,8 @@ public class CourseRes {
 		return message;
 	}
 
-	public void setMessage(String message) {
+	public void setMessage(String code, String message) {
+		this.code = code;
 		this.message = message;
 	}
 
@@ -107,5 +124,22 @@ public class CourseRes {
 	public void setCourse(Course course) {
 		this.course = course;
 	}
+
+	public Student getStudent() {
+		return student;
+	}
+
+	public void setStudent(Student student) {
+		this.student = student;
+	}
+
+	public String getCode() {
+		return code;
+	}
+
+	public void setCode(String code) {
+		this.code = code;
+	}
+	
 
 }

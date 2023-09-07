@@ -4,9 +4,11 @@ import java.sql.Time;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -15,9 +17,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.CollectionUtils;
 import org.springframework.util.StringUtils;
 
+import com.example.Student_Selection.Constants.StudentCourse_Rtncode;
 import com.example.Student_Selection.Entity.Course;
+import com.example.Student_Selection.Entity.CoursePeoples;
 import com.example.Student_Selection.Entity.Student;
 import com.example.Student_Selection.Respository.CourseDao;
+import com.example.Student_Selection.Respository.CoursePeoplesDao;
 import com.example.Student_Selection.Respository.StudentDao;
 import com.example.Student_Selection.Service.Face.CourseFace;
 import com.example.Student_Selection.Vo.CourseRes;
@@ -28,8 +33,11 @@ public class Courseimpl implements CourseFace {
 	private CourseDao courseDao;
 	@Autowired
 	private StudentDao studentDao;
+	@Autowired
+	private CoursePeoplesDao coursePeoplesDao;
 
 //--------------------------------------------------------------------------私有方法
+	// 確認是否符合規格
 	private boolean checkWeekAndPoint(String week, int point) {
 		List<String> list = new ArrayList<>(List.of("一", "二", "三", "四", "五"));
 		// ---- foreach
@@ -55,239 +63,366 @@ public class Courseimpl implements CourseFace {
 		return listset.isEmpty();
 	}
 
+	// ---------------------確認是否為空
+	private CourseRes checkListIsNull(List<String> checkNullList) {
+		CourseRes res = new CourseRes();
+		for (var item : checkNullList) {
+			if (!StringUtils.hasText(item)) {
+				res.setMessage(StudentCourse_Rtncode.CHECKLISTISNULL.getCode(),
+						StudentCourse_Rtncode.CHECKLISTISNULL.getMessage());
+				return res;
+			}
+		}
+
+		return null;
+
+	}
+
+	// ---------------------判斷是否衝堂(以及算學分)<key, Object> Ps.Object是所有型別的父親
+	private Map<String, Object>  checkCourseIdTimeList(List<Course> courseTime, int pointTotal) {
+		Map<String, Object> map = new HashMap<>();
+		CourseRes res = new CourseRes();
+
+		// 取得第一筆資料去比對下一筆資料,不要比對到自己
+		for (int i = 0; i < courseTime.size(); i++) {
+			Course courseId1 = courseTime.get(i);
+			for (int j = i + 1; j < courseTime.size(); j++) {
+				Course courseId2 = courseTime.get(j);
+
+				// 不能選相同名稱的課程
+				if (courseId1.getCourse_name().equals(courseId2.getCourse_name())) {
+					res.setMessage(StudentCourse_Rtncode.CHECKCOURSENAME.getCode(),
+							StudentCourse_Rtncode.CHECKCOURSENAME.getMessage());
+					map.put("res", res);
+					return map;
+				}
+				/*
+				 * 時間判斷:首先判斷有沒有撞week,撞時比對時間<排除> ( 當前"開始"時間在下一堂課的"結束"時間"後面" <這件事情為"否"時> /而且/
+				 * 當前"結束"時間在下一堂課的"開始"時間"前面" ) <這件事情為"否"時>
+				 */
+				if (courseId1.getWeek().equals(courseId2.getWeek())) {
+					if ((!courseId1.getStart_time().after(courseId2.getEnd_time()))
+							&& (!courseId1.getEnd_time().before(courseId2.getStart_time()))) {
+						res.setMessage(StudentCourse_Rtncode.CHECKCOURSTIME.getCode(),
+								StudentCourse_Rtncode.CHECKCOURSTIME.getMessage());
+						map.put("res", res);
+						return map;
+					}
+				}
+			}
+			pointTotal += courseId1.getCourse_point();
+		}
+		if (pointTotal > 10) {
+			res.setMessage(StudentCourse_Rtncode.CHECKSTUDENTPOINT.getCode(),
+					StudentCourse_Rtncode.CHECKSTUDENTPOINT.getMessage());
+			map.put("res", res);
+			return map;
+		}
+		// 這裡的res是空的
+		map.put("res", res);
+		// key,分數總和
+		map.put("total", pointTotal);
+		return map;
+	}
+
 //----------------------------------------------------------------------------私有方法
 	// ==============================================================================1.針對課程新增+修改
 	@Override
 	public CourseRes addCourse(String courseid, String name, String week, String start, String end, int point) {
-		Optional<Course> courseop = courseDao.findById(courseid);
-		Course addandUpdatecoursec = new Course();
 		CourseRes res = new CourseRes();
-		String chickStartandEnd = "(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]";
-		boolean a = start.matches(chickStartandEnd);
-		boolean b = end.matches(chickStartandEnd);
-		boolean c = (new Courseimpl().checkWeekAndPoint(week, point));
+		List<String> checkListIsNull = Arrays.asList(courseid, name, week, start, end);
+		CourseRes checkSomeInfo = checkListIsNull(checkListIsNull);
+		if (checkSomeInfo != null) {
+			return checkSomeInfo;
+		}
+		// 防止不合資格的時間的正規表達式
+		String chickStartAndEnd = "(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]";
+		// 確認是否符合資格
+		boolean checkStartTime = start.matches(chickStartAndEnd);
+		boolean checkEndTime = end.matches(chickStartAndEnd);
+		// 基本防呆
+		boolean checkWeekOrPoint = checkWeekAndPoint(week, point);
+
+		// 基本防呆 1. <時間資格判斷> 2. <星期判斷> 3. <學分判斷>
+		if (!checkStartTime || !checkEndTime || !checkWeekOrPoint) {
+			res.setMessage(StudentCourse_Rtncode.CHECKINFO.getCode(), StudentCourse_Rtncode.CHECKINFO.getMessage());
+			return res;
+		}
+
+		// 因為Time會取到三個節點 ,但通常只會輸入兩個 EX:01:00+:00,為了之後轉成時間型態
 		start += ":00";
 		end += ":00";
-		if (!StringUtils.hasText(courseid) || !StringUtils.hasText(name) || start.equals(end)) {
-			res.setMessage("不能空空或不能撞時間");
+
+		Optional<Course> courseop = courseDao.findById(courseid);
+
+		Course addOrUpdatecourse = new Course();
+		// 轉成時間型態
+		Time timeStart = Time.valueOf(start);
+		Time timeEnd = Time.valueOf(end);
+
+		if (timeEnd.before(timeStart)) {
+			res.setMessage(StudentCourse_Rtncode.CHECKTIME.getCode(), StudentCourse_Rtncode.CHECKTIME.getMessage());
 			return res;
 		}
-		if (!a || !b || !c) {
-			res.setMessage("時間格式ex: 01:00 or week只能 一 ~ 五 or 學分不得低於零,大於三或null");
-			return res;
-		}
-		Time TimeStart = Time.valueOf(start);
-		Time TimeEnd = Time.valueOf(end);
-		if (TimeEnd.before(TimeStart)) {
-			res.setMessage("結束時間不可小於開始時間");
-			return res;
-		}
+
+		// 掉進來,代表是新增
 		if (!courseop.isPresent()) {
-			addandUpdatecoursec.setCourse_id(courseid);
-			addandUpdatecoursec.setCourse_name(name);
-			addandUpdatecoursec.setWeek(week);
-			addandUpdatecoursec.setStart_time(TimeStart);
-			addandUpdatecoursec.setEnd_time(TimeEnd);
-			addandUpdatecoursec.setCourse_point(point);
-			courseDao.save(addandUpdatecoursec);
-			res.setMessage("新增成功");
-			return res;
+			addOrUpdatecourse.setCourse_id(courseid);
+			addOrUpdatecourse.setCourse_name(name);
+			addOrUpdatecourse.setWeek(week);
+			addOrUpdatecourse.setStart_time(timeStart);
+			addOrUpdatecourse.setEnd_time(timeEnd);
+			addOrUpdatecourse.setCourse_point(point);
+			courseDao.save(addOrUpdatecourse);
+			return new CourseRes(addOrUpdatecourse, StudentCourse_Rtncode.ADDSUCCESSFUL.getMessage());
 		}
-		addandUpdatecoursec = courseop.get();
-		addandUpdatecoursec.setCourse_name(name);
-		addandUpdatecoursec.setWeek(week);
-		addandUpdatecoursec.setStart_time(TimeStart);
-		addandUpdatecoursec.setEnd_time(TimeEnd);
-		addandUpdatecoursec.setCourse_point(point);
-		courseDao.save(addandUpdatecoursec);
-		res.setMessage("修改成功"); // 還需一個更新學生學分的程式
-		return res;
+
+		// 上面沒擋掉是修改
+		addOrUpdatecourse = courseop.get();
+		addOrUpdatecourse.setCourse_name(name);
+		addOrUpdatecourse.setWeek(week);
+		addOrUpdatecourse.setStart_time(timeStart);
+		addOrUpdatecourse.setEnd_time(timeEnd);
+		addOrUpdatecourse.setCourse_point(point);
+		courseDao.save(addOrUpdatecourse);
+		return new CourseRes(addOrUpdatecourse, StudentCourse_Rtncode.UPDATESUCCESSFUL.getMessage());
+
 	}
 
 	// ==============================================================================2.針對學生新增+修改
 	@Override
 	public CourseRes addStudent(String studentid, String name) {
-		Student students = new Student();
-		CourseRes res = new CourseRes();
-		if (!StringUtils.hasText(studentid) || !StringUtils.hasText(name)) {
-			res.setMessage("不能空");
+		Student studentInfo = new Student();
+		List<String> checkListIsNull = Arrays.asList(studentid, name);
+
+		// 方法抽取防呆
+		CourseRes res = checkListIsNull(checkListIsNull);
+		if (res != null) {
 			return res;
 		}
-		Optional<Student> courseop = studentDao.findById(studentid);
-		if (courseop.isPresent()) {
-			students = courseop.get();
-			students.setName(name);
-			res.setMessage("修改成功");
-			studentDao.save(students);
-			return res;
+
+//		//上面沒擋掉的話res是空的,這裡要給他新的記憶體空間
+//		res = new CourseRes(); 
+//		
+		Optional<Student> courseOp = studentDao.findById(studentid);
+
+		// 掉進來代表是修改
+		if (courseOp.isPresent()) {
+			studentInfo = courseOp.get();
+			studentInfo.setName(name);
+			studentDao.save(studentInfo);
+			return new CourseRes(studentInfo, StudentCourse_Rtncode.UPDATESUCCESSFUL.getMessage());
 		}
-		students.setStudent_id(studentid);
-		students.setName(name);
-		res.setMessage("新增成功");
-		studentDao.save(students);
-		return res;
+
+		// 上面沒擋掉新增
+		studentInfo.setStudent_id(studentid);
+		studentInfo.setName(name);
+		studentDao.save(studentInfo);
+		return new CourseRes(studentInfo, StudentCourse_Rtncode.ADDSUCCESSFUL.getMessage());
 	}
 
 	// ==============================================================================3.學生選課
 	@Override
 	public CourseRes addStudentCourse(String studentid, Set<String> list) {
-		Optional<Student> studentop = studentDao.findById(studentid); // 找到學生
-		Student studentinfo = studentop.get(); // 取值,因為後面要拿出選課程的資訊
 		CourseRes res = new CourseRes();
-		boolean checklist = (new Courseimpl().checkList(list)); // 判斷是否為空的私有方法
-		if (checklist) {
-			res.setMessage("不能為空");
-			return res;
-		}
-		boolean chickisnull = false; // 當學生裡面原本沒有課程時,不用切割時拿來判斷的布林值
-		String stucourseID = studentinfo.getCourse_id(); // 用string找到課程的資訊,(此時會有一大長串)
-		if ((stucourseID == null && studentop.isPresent()) || stucourseID.length() == 0) { // 如果原本的課程是null,代表要直接判斷list原本的值
-			chickisnull = true; // 上面判斷的lengh其實是多餘的
-		} else if (stucourseID.length() != 0 && studentop.isPresent()) {// 如果原本的課程裡面有值,要拿出來進行切割
-			String[] cutstring = stucourseID.split(","); // 拿出學生原本選的課程,切割
-			for (String item : cutstring) { // 編歷陣列
-				list.add(item.trim()); // 要去空白,不然切出來的東西會有空白(這裡的add照理說會加原有的選課id,但因為set過濾重複)
-			}
-		} else {
-			res.setMessage("查無此人");
-			return res;
-		}
-		int total = 0;// 計算總共學分數
-		if (studentop.isPresent() || chickisnull == true) {
-			// 取得,進入判斷
-			List<Course> coursetime = courseDao.findAllByCourseidIn(list);
-			// --------------------------------------------------防呆
-			if (list.size() != coursetime.size()) {
-				res.setMessage("不能新增不在名單上的課程");
-				return res;
-			}
-			// --------------------------------------------------防完這層才能進入編歷環節
-			for (int i = 0; i < coursetime.size(); i++) {
-				Course courseid = coursetime.get(i);
-				for (int j = i + 1; j < coursetime.size(); j++) {
-					Course courseid2 = coursetime.get(j);
-					if (courseid.getCourse_name().equals(courseid2.getCourse_name())) {
-						res.setMessage("課程不能相同");
-						return res;
-					}
-					// ----------------
-					/*
-					 * 時間判斷:首先判斷有沒有撞week,撞時比對時間<排除>
-					 * (   當前"開始"時間在下一堂課的"結束"時間"後面"       <這件事情為"否"時>
-					 * 	/而且/  
-					 *     當前"結束"時間在下一堂課的"開始"時間"前面" )	  <這件事情為"否"時>	 
-					 */
-					if (courseid.getWeek().equals(courseid2.getWeek())) {
-						if ((!courseid.getStart_time().after(courseid2.getEnd_time()))
-								&& (!courseid.getEnd_time().before(courseid2.getStart_time()))) {
-							res.setMessage("衝堂");
-							return res;
-						}
-					}
-					// ----------------
-				}
-				total += courseid.getCourse_point();
 
-			}
-			if (total > 10) {
-				res.setMessage("大於10學分");
-				return res;
+		// 判斷是否為空的私有方法
+		boolean checkList = checkList(list);
+
+		if (checkList || !StringUtils.hasText(studentid)) {
+			res.setMessage(StudentCourse_Rtncode.CHECKNULL.getCode(), StudentCourse_Rtncode.CHECKNULL.getMessage());
+			return res;
+		}
+
+		// 進資料庫
+		Optional<Student> studentOp = studentDao.findById(studentid);
+
+		// 找不到學生的防呆
+		if (!studentOp.isPresent()) {
+			res.setMessage(StudentCourse_Rtncode.CHECKSTUDENT.getCode(),
+					StudentCourse_Rtncode.CHECKSTUDENT.getMessage());
+			return res;
+		}
+
+		// 取值,因為後面要拿出選課程的資訊
+		Student studentInfo = studentOp.get();
+
+		// 用string型態 找到課程的資訊,(此時會有一大長串) Ex: a01,a02
+		String studentCourseId = studentInfo.getCourse_id();
+
+		// 如果學生原本的課程是null,代表要直接判斷list原本的值,如果不是,代表要切割
+		if (studentCourseId != null && studentCourseId.length() != 0) {
+
+			// 拿出學生原本選的課程,切割 Ex:[a01 , a02]
+			String[] cutStudentCourseId = studentCourseId.split(",");
+
+			for (String item : cutStudentCourseId) {
+				list.add(item.trim()); // 要去空白,不然切出來的東西會有空白(這裡的add照理說會加原有的選課id,同時set過濾重複)
 			}
 		}
+
+		// 進入資料庫
+		List<Course> courseTime = courseDao.findAllByCourseidIn(list);
+
+		// 當如果他加選的課程不在課程名單中的防呆判斷
+		if (list.size() != courseTime.size()) {
+			res.setMessage(StudentCourse_Rtncode.CHECKCOURSELIST.getCode(),
+					StudentCourse_Rtncode.CHECKCOURSELIST.getMessage());
+			return res;
+		}
+
+		// 計算總共學分數
+		int calculatePoint = 0;
+
+		// 進入迴圈,並且判斷 1.有無選到相同名稱的課程 2.衝堂 3.大於10學分 4.以上都沒問題,學分計算
+		Map<String, Object> map = checkCourseIdTimeList(courseTime, calculatePoint);
+
+		// 用key取得到訊息
+		// 強制轉型<當res不是空的時候,是錯誤的,固要進入判斷,回傳訊息給用戶>
+		res = (CourseRes) map.get("res");
+
+		// 強制轉型<取出學分總和>
+		Integer resultTotal = (Integer) map.get("total");
+
+		// 如果Message有東西,他會進來,並且回傳該防呆訊息
+		if (StringUtils.hasText(res.getMessage())) {
+			return res;
+		}
+
 		// --------------------最後一步
-		String newstr = list.toString().substring(1, list.toString().length() - 1);
-		studentinfo.setCourse_id(newstr);
-		studentinfo.setCourse_point(total);
-		studentDao.save(studentinfo);
-		res.setMessage("成功");
+		String newString = list.toString().substring(1, list.toString().length() - 1);
+		studentInfo.setCourse_id(newString);
+		studentInfo.setCourse_point(resultTotal);
+		studentDao.save(studentInfo);
+		return new CourseRes(studentInfo, StudentCourse_Rtncode.ADDSUCCESSFUL.getMessage());
 
-		return res;
 	}
 
-	// ==============================================================================4.學生刪課
+	// ==============================================================================4.學生退選
 	public CourseRes deleteCourse(String studentid, Set<String> list) {
-		Optional<Student> studentop = studentDao.findById(studentid);
 		CourseRes res = new CourseRes();
-		// 確認有沒有這個人,沒有就直接擋掉
-		if (!studentop.isPresent() || !StringUtils.hasText(studentid)) {
-			res.setMessage("查無此人");
+
+		if (!StringUtils.hasText(studentid)) {
+			res.setMessage(StudentCourse_Rtncode.CHECKNULL.getCode(), StudentCourse_Rtncode.CHECKNULL.getMessage());
 			return res;
 		}
-		boolean checkdeletelistset = false;// 用在確認要刪除的課程有沒有被包含在原本選課範圍內
-		Student studentinfo = studentop.get(); // 取值,因為後面要拿出選課程的資訊
-		List<String> courseidlist = new ArrayList<>(); // 接原本課程的list
-		List<String> deletelistset = new ArrayList<>(); // 預備刪除的課程
-		List<String> finalsavelist = new ArrayList<>(); // 最終存進去的list
+
+		Optional<Student> studentOp = studentDao.findById(studentid);
+
+		// 掉進來是新增
+		if (!studentOp.isPresent()) {
+			res.setMessage(StudentCourse_Rtncode.CHECKSTUDENT.getCode(),
+					StudentCourse_Rtncode.CHECKSTUDENT.getMessage());
+			return res;
+		}
+
+		// 用在確認要刪除的課程有沒有被包含在原本選課範圍內
+		boolean checkDeleteList = false;
+
+		// 取值,因為後面要拿出選課程的資訊
+		Student studentInfo = studentOp.get();
+
+		// 接原本課程的list
+		List<String> courseIdList = new ArrayList<>();
+
+		// 預備刪除的課程
+		List<String> deleteCourseIdList = new ArrayList<>();
+
+		// 最終存進去的list
+		List<String> finalSaveList = new ArrayList<>();
+
+		// 將接進來的學生刪課資訊轉成list(可用for迴圈代替)
 		list.forEach(item -> {
-			deletelistset.add(item.trim()); // 將接進來的學生刪課資訊轉成list(可用for迴圈代替)
+			deleteCourseIdList.add(item.trim());
 		});
 
-		String[] cutstring = studentinfo.getCourse_id().split(",");// 對長字串進行切割
-		for (var cutstringfor : cutstring) {
-			courseidlist.add(cutstringfor.trim());// 接原本有的課程
+		// 對長字串進行切割(學生原本的課程)並且接出原本的課程
+		String[] cutString = studentInfo.getCourse_id().split(",");
+		for (var courseItem : cutString) {
+			courseIdList.add(courseItem.trim());
 		}
-		// ------確認要刪除的課程有沒有包含在選課範圍內
-		for (int x = 0; x < deletelistset.size(); x++) {
-			checkdeletelistset = courseidlist.contains(deletelistset.get(x)); // 包含
+
+		// 確認要刪除的課程有沒有包含在選課範圍內
+		for (int x = 0; x < deleteCourseIdList.size(); x++) {
+			checkDeleteList = courseIdList.contains(deleteCourseIdList.get(x)); // 包含
 		}
-		// ------
-		int total = 0;// 算學分用
-		// ==============================
-		// ------如果是就掉進來
-		if (checkdeletelistset) {
-			Compare: for (int i = 0; i < courseidlist.size(); i++) { // 全部舊有課程
-				for (int j = 0; j < deletelistset.size(); j++) { // 預備刪除課程
-					if (deletelistset.get(j).equals(courseidlist.get(i))) {
-						continue Compare;
+
+		// 算學分用
+		int total = 0;
+
+		// 用在確認要刪除的課程有沒有被包含在原本選課範圍內<都有包含就進來>
+		if (checkDeleteList) {
+			Compare: for (int i = 0; i < courseIdList.size(); i++) { // 全部舊有課程
+				for (int j = 0; j < deleteCourseIdList.size(); j++) { // 預備刪除課程
+					if (deleteCourseIdList.get(j).equals(courseIdList.get(i))) {// 有包含帶表示要退選該課程,那就不要存進finalSaveList
+						continue Compare; // 當遇到有包含時,跳回指定迴圈
 					}
 				}
-				finalsavelist.add(courseidlist.get(i));
+				finalSaveList.add(courseIdList.get(i)); // 將最終要存進去的課程放進list
 			}
 		}
-		// ------否則就掉過來
+		// 掉進來代表退選的課程不存在他選課的範圍
 		else {
-			res.setMessage("不能刪除不在選課範圍內的課程");
+			res.setMessage(StudentCourse_Rtncode.CHECKSTUDENTCOURSELIST.getCode(),
+					StudentCourse_Rtncode.CHECKSTUDENTCOURSELIST.getMessage());
 			return res;
 		}
 		// -------------------------------計算學分
-		List<Course> savepointlist = courseDao.findAllByCourseidIn(finalsavelist);
-		for (var savepointlistfor : savepointlist) {
-			total += savepointlistfor.getCourse_point();
+
+		List<Course> savePointList = courseDao.findAllByCourseidIn(finalSaveList);
+		for (var pointItem : savePointList) {
+			total += pointItem.getCourse_point();
 		}
-		// ---------------------------------
-		String newstr = finalsavelist.toString().substring(1, finalsavelist.toString().length() - 1);
-		studentinfo.setCourse_id(newstr);
-		studentinfo.setCourse_point(total);
-		res.setMessage("刪除");
-		studentDao.save(studentinfo);
-		return res;
+
+		// ---------------------------------最後一步
+		String newString = finalSaveList.toString().substring(1, finalSaveList.toString().length() - 1);
+		studentInfo.setCourse_id(newString);
+		studentInfo.setCourse_point(total);
+		studentDao.save(studentInfo);
+		return new CourseRes(studentInfo, StudentCourse_Rtncode.DELETESUCCESSFUL.getMessage());
 	}
 
 	// ==============================================================5.藉由學號查詢,顯示課程代碼,課程名稱等資訊
 	@Override
-	public CourseRes searchStudentIdandCourseId(String studentid) {
-		Optional<Student> studentop = studentDao.findById(studentid);
+	public CourseRes searchStudentIdandCourseId(String studentId) {
 		CourseRes res = new CourseRes();
-		if (!studentop.isPresent()) {
-			res.setMessage("查無此人");
+		if (!StringUtils.hasText(studentId)) {
+			res.setMessage(StudentCourse_Rtncode.CHECKNULL.getCode(), StudentCourse_Rtncode.CHECKNULL.getMessage());
 			return res;
 		}
-		List<String> studentCourselist = new ArrayList<>();
-		Student studentinfo = studentop.get(); // 取得學生資訊,藉此比對課程id
-		String studentCourse = studentinfo.getCourse_id();
+		Optional<Student> studentOp = studentDao.findById(studentId);
+		if (!studentOp.isPresent()) {
+			res.setMessage(StudentCourse_Rtncode.CHECKSTUDENT.getCode(),
+					StudentCourse_Rtncode.CHECKSTUDENT.getMessage());
+			return res;
+		}
+		// 取得該學生選的課程
+		List<String> studentCourseList = new ArrayList<>();
+
+		// 取得學生資訊,藉此比對課程id
+		Student studentInfo = studentOp.get();
+
+		String studentCourse = studentInfo.getCourse_id();
 		String[] cutstring = studentCourse.split(",");
-		for (var cutstringfor : cutstring) {
-			studentCourselist.add(cutstringfor.trim()); // 切割存list
+
+		// 切割存list
+		for (var studentCourseItem : cutstring) {
+			studentCourseList.add(studentCourseItem.trim());
 		}
-		List<Course> courseIdlist2 = new ArrayList<>();
-		List<Student> studentlist = new ArrayList<>();
-		List<Course> courseIdlist = courseDao.findAllByCourseidIn(studentCourselist);
-		for (var courseIdlistfor : courseIdlist) {
-			courseIdlist2.add(courseIdlistfor);
+
+		// 用來存課程資訊的list
+		List<Course> CourseIdInfoList = new ArrayList<>();
+
+		// 進入資料庫搜索該課程資訊
+		List<Course> courseIdInfo = courseDao.findAllByCourseidIn(studentCourseList);
+		for (var courseItem : courseIdInfo) {
+			CourseIdInfoList.add(courseItem);
 		}
-		studentlist.add(studentinfo); // 顯示學生資訊
-		res.setStudentlist(studentlist);// 顯示學生資訊
-		res.setCourselist(courseIdlist2);// 顯示課堂資訊
+		// 顯示學生資訊
+		res.setStudent(studentInfo);
+		// 顯示課堂資訊
+		res.setCourselist(CourseIdInfoList);
+
 		return res;
 	}
 
@@ -295,27 +430,170 @@ public class Courseimpl implements CourseFace {
 
 	@Override
 	public CourseRes searchCourseId(String courseid) {
-		Optional<Course> courseOp = courseDao.findById(courseid);
 		CourseRes res = new CourseRes();
-		if (!StringUtils.hasText(courseid) || !courseOp.isPresent()) {
-			res.setMessage("查無此代碼");
+		if (!StringUtils.hasText(courseid)) {
+			res.setMessage(StudentCourse_Rtncode.CHECKNULL.getCode(), StudentCourse_Rtncode.CHECKNULL.getMessage());
 			return res;
 		}
-		Course courseget = courseOp.get();
-		res.setCourse(courseget);
+		Optional<Course> courseOp = courseDao.findById(courseid);
+
+		if (!courseOp.isPresent()) {
+			res.setMessage(StudentCourse_Rtncode.CANTFINDCOURSE.getCode(),
+					StudentCourse_Rtncode.CANTFINDCOURSE.getMessage());
+			return res;
+		}
+
+		// 上面防呆沒擋掉,要取得課程資訊
+		Course courseGet = courseOp.get();
+		res.setCourse(courseGet);
 		return res;
 	}
 
 	// ====================================================================7.依課程名稱查詢
 	public CourseRes searchByCourseName(String coursename) {
-		List<Course> courselist = courseDao.findByCoursename(coursename);
 		CourseRes res = new CourseRes();
-		if (courselist.size() == 0 || !StringUtils.hasText(coursename)) {
-			res.setMessage("查無此課程");
+		if (!StringUtils.hasText(coursename)) {
+			res.setMessage(StudentCourse_Rtncode.CHECKNULL.getCode(), StudentCourse_Rtncode.CHECKNULL.getMessage());
 			return res;
 		}
-		res.setCourselist(courselist);
+		List<Course> courseInfoList = courseDao.findByCoursename(coursename);
+
+		// 這裡防的是不存在的課程名稱
+		if (courseInfoList.size() == 0) {
+			res.setMessage(StudentCourse_Rtncode.CANTFINDCOURSE.getCode(),
+					StudentCourse_Rtncode.CANTFINDCOURSE.getMessage());
+			return res;
+		}
+
+		// 上面防呆沒擋掉,顯示課程資訊
+		res.setCourselist(courseInfoList);
+
 		return res;
+
+	}
+
+	// --------------------------------失敗就刪掉
+	@Override
+	public CourseRes addStudentCourseAndLimitPeople(String studentid, Set<String> list) {
+
+		CourseRes res = new CourseRes();
+
+		// 判斷是否為空的私有方法
+		boolean checkList = checkList(list);
+
+		if (checkList || !StringUtils.hasText(studentid)) {
+			res.setMessage(StudentCourse_Rtncode.CHECKNULL.getCode(), StudentCourse_Rtncode.CHECKNULL.getMessage());
+			return res;
+		}
+
+		// 進資料庫
+		Optional<Student> studentOp = studentDao.findById(studentid);
+
+		// 找不到學生的防呆
+		if (!studentOp.isPresent()) {
+			res.setMessage(StudentCourse_Rtncode.CHECKSTUDENT.getCode(),
+					StudentCourse_Rtncode.CHECKSTUDENT.getMessage());
+			return res;
+		}
+
+		// 取值,因為後面要拿出選課程的資訊
+		Student studentInfo = studentOp.get();
+
+		// 用string型態 找到課程的資訊,(此時會有一大長串) Ex: a01,a02
+		String studentCourseId = studentInfo.getCourse_id();
+
+		// 如果學生原本的課程是null,代表要直接判斷list原本的值,如果不是,代表要切割
+		if (studentCourseId != null && studentCourseId.length() != 0) {
+
+			// 拿出學生原本選的課程,切割 Ex:[a01 , a02]
+			String[] cutStudentCourseId = studentCourseId.split(",");
+
+			for (String item : cutStudentCourseId) {
+				list.add(item.trim()); // 要去空白,不然切出來的東西會有空白(這裡的add照理說會加原有的選課id,同時set過濾重複)
+			}
+		}
+
+		// 進入資料庫
+		List<Course> courseTime = courseDao.findAllByCourseidIn(list);
+
+		// 當如果他加選的課程不在課程名單中的防呆判斷
+		if (list.size() != courseTime.size()) {
+			res.setMessage(StudentCourse_Rtncode.CHECKCOURSELIST.getCode(),
+					StudentCourse_Rtncode.CHECKCOURSELIST.getMessage());
+			return res;
+		}
+
+		// 計算總共學分數
+		int calculatePoint = 0;
+
+		// 進入迴圈,並且判斷 1.有無選到相同名稱的課程 2.衝堂 3.大於10學分 4.以上都沒問題,進行學分計算
+		Map<String, Object> map = checkCourseIdTimeList(courseTime, calculatePoint);
+
+		// 用key取得到訊息
+		// 強制轉型<當res不是空的時候,是錯誤的,固要進入判斷,回傳訊息給用戶>
+		res = (CourseRes) map.get("res");
+
+		// 強制轉型<取出學分總和>
+		Integer resultTotal = (Integer) map.get("total");
+
+		// 如果Message有東西,他會進來,並且回傳該防呆訊息
+		if (StringUtils.hasText(res.getMessage())) {
+			return res;
+		}
+		CoursePeoples peoples = new CoursePeoples();
+		CoursePeoples peoples2 = new CoursePeoples();
+		// 用於判斷人數上限
+		List<CoursePeoples> peoplesListlimit = new ArrayList<>();
+//				coursePeoplesDao.findByCourseIdAndCoursePeople(studentCourseId, studentCourseId)。
+
+		List<String> checkcouresidpeople = new ArrayList<>();
+		for (var courseItem : courseTime) {
+			checkcouresidpeople.add(courseItem.getCourse_id());
+		}
+		List<String> peopless = new ArrayList<>();
+		
+		boolean checkIsEmpty = false;
+		List<CoursePeoples> peoplesList = coursePeoplesDao.findByCourseIdIn(checkcouresidpeople); // ex:a01,a02課程
+		if (peoplesList.isEmpty()) {
+			for (var courseItem : courseTime) {
+				int x = (int)(Math.random()*1000000);
+				peoples.setSerialNumber(x);
+				peoples.setCourseId(courseItem.getCourse_id());
+				peoples.setCoursePeople(studentid);
+				coursePeoplesDao.save(peoples); 
+//				x++;
+				checkIsEmpty = true;
+			}
+		}
+		if (!checkIsEmpty) {
+			for (int i = 0; i < peoplesList.size(); i++) {
+				peoples = peoplesList.get(i);
+				for (int j = i + 1; j < peoplesList.size(); j++) { //這裡的迴圈邏輯錯誤
+					peoples2 = peoplesList.get(j);
+					if (peoples.getCourseId().equals(peoples2.getCourseId())
+							&& peoples.getCoursePeople().equals(peoples2.getCoursePeople())) {
+						res.setMessage("", "別選同門課程");
+						return res;
+					} else if (peoples.getCourseId().equals(peoples2.getCourseId())) {
+						peoplesListlimit.add(peoples); // 取得該門課的總人數ex:a01:3人/a02:4人
+					}
+					if (peoplesListlimit.size() > (peoplesList.size() * 5)) {
+						res.setMessage("", "人數到達上限");
+						return res;
+					}
+					peoples.setCourseId(peoples.getCourseId());
+					peoples.setCoursePeople(studentid);
+					coursePeoplesDao.save(peoples);
+				}
+			}
+		}
+		// --------------------最後一步
+		String newString = list.toString().substring(1, list.toString().length() - 1);
+		studentInfo.setCourse_id(newString);
+		studentInfo.setCourse_point(resultTotal);
+
+		studentDao.save(studentInfo);
+		return new CourseRes(studentInfo, StudentCourse_Rtncode.ADDSUCCESSFUL.getMessage());
 
 	}
 
